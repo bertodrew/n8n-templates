@@ -1,0 +1,585 @@
+{
+  "name": "Google Sheet Meetup API Event Fetcher",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        480
+      ],
+      "id": "manual-trigger-1",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Locations",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        380
+      ],
+      "id": "read-locations",
+      "name": "Read Locations from Sheet"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=1",
+          "mode": "list",
+          "cachedResultName": "Topics",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        580
+      ],
+      "id": "read-topics",
+      "name": "Read Topics from Sheet"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Map topic names to Meetup category IDs\n// Full list: https://www.meetup.com/api/schema/#topic-category-id\nconst topicCategoryMap = {\n  'arts': 1,\n  'book clubs': 2,\n  'career': 3,\n  'cars': 4,\n  'community': 5,\n  'dancing': 6,\n  'education': 7,\n  'fashion': 8,\n  'fitness': 9,\n  'food': 10,\n  'games': 11,\n  'health': 13,\n  'hobbies': 14,\n  'language': 16,\n  'lgbtq': 12,\n  'lifestyle': 15,\n  'movies': 17,\n  'music': 18,\n  'new age': 19,\n  'outdoors': 20,\n  'paranormal': 21,\n  'parents': 22,\n  'pets': 23,\n  'photography': 24,\n  'politics': 25,\n  'religion': 26,\n  'sci-fi': 27,\n  'singles': 28,\n  'socializing': 29,\n  'sports': 30,\n  'support': 31,\n  'technology': 34,\n  'tech': 34,\n  'ai': 34,\n  'artificial intelligence': 34,\n  'machine learning': 34,\n  'software': 34,\n  'programming': 34,\n  'web development': 34,\n  'blockchain': 34,\n  'cryptocurrency': 34,\n  'writing': 36\n};\n\nconst locations = $('Read Locations from Sheet').all().map(item => {\n  const loc = item.json.location || item.json.Location || Object.values(item.json)[0];\n  const lat = item.json.latitude || item.json.lat || item.json.Latitude;\n  const lon = item.json.longitude || item.json.lon || item.json.lng || item.json.Longitude;\n  const radius = item.json.radius || item.json.Radius || 25;\n  \n  return {\n    location: loc,\n    latitude: parseFloat(lat),\n    longitude: parseFloat(lon),\n    radius: parseInt(radius)\n  };\n}).filter(loc => loc.latitude && loc.longitude);\n\nconst topics = $('Read Topics from Sheet').all().map(item => {\n  const topicName = (item.json.topic || item.json.Topic || Object.values(item.json)[0]).toLowerCase().trim();\n  const categoryId = topicCategoryMap[topicName] || 34; // Default to technology\n  \n  return {\n    topicName: topicName,\n    categoryId: categoryId\n  };\n}).filter(topic => topic.topicName);\n\n// Create combinations of locations and topics\nconst searchCombinations = [];\n\nfor (const location of locations) {\n  for (const topic of topics) {\n    searchCombinations.push({\n      location: location.location,\n      latitude: location.latitude,\n      longitude: location.longitude,\n      radius: location.radius,\n      topicName: topic.topicName,\n      topicCategoryId: topic.categoryId\n    });\n  }\n}\n\nreturn searchCombinations.map(combo => ({ json: combo }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        480
+      ],
+      "id": "create-search-combinations",
+      "name": "Create Search Combinations"
+    },
+    {
+      "parameters": {
+        "amount": 1000,
+        "unit": "milliseconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        480
+      ],
+      "id": "rate-limit",
+      "name": "Rate Limit (1s)"
+    },
+    {
+      "parameters": {
+        "url": "https://api.meetup.com/find/upcoming_events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "topic_category",
+              "value": "={{ $json.topicCategoryId }}"
+            },
+            {
+              "name": "lat",
+              "value": "={{ $json.latitude }}"
+            },
+            {
+              "name": "lon",
+              "value": "={{ $json.longitude }}"
+            },
+            {
+              "name": "radius",
+              "value": "={{ $json.radius }}"
+            },
+            {
+              "name": "page",
+              "value": "50"
+            },
+            {
+              "name": "fields",
+              "value": "featured_photo,group_key_photo,series,venue"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        480
+      ],
+      "id": "fetch-meetup-api",
+      "name": "Fetch Meetup API",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Meetup API Key"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-events",
+              "leftValue": "={{ $json.events }}",
+              "rightValue": "",
+              "operator": {
+                "type": "array",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1360,
+        480
+      ],
+      "id": "has-events",
+      "name": "Has Events?"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "events",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        400
+      ],
+      "id": "split-events",
+      "name": "Split Events"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format Meetup API event data\nconst event = $input.item.json;\nconst searchContext = $('Rate Limit (1s)').item.json;\n\n// Extract venue information\nlet venueInfo = 'Online';\nlet venueAddress = '';\nlet venueName = '';\n\nif (event.venue) {\n  venueName = event.venue.name || '';\n  venueAddress = [\n    event.venue.address_1,\n    event.venue.city,\n    event.venue.state,\n    event.venue.zip\n  ].filter(Boolean).join(', ');\n  venueInfo = venueAddress || venueName || 'Online';\n}\n\n// Format date\nconst eventDate = new Date(event.time);\nconst formattedDate = eventDate.toLocaleDateString('en-US', {\n  weekday: 'long',\n  year: 'numeric',\n  month: 'long',\n  day: 'numeric',\n  hour: '2-digit',\n  minute: '2-digit'\n});\n\n// Calculate RSVP status\nconst spotsLeft = (event.rsvp_limit || 999) - (event.yes_rsvp_count || 0);\nconst rsvpStatus = event.rsvp_limit \n  ? `${spotsLeft} spots left of ${event.rsvp_limit}`\n  : `${event.yes_rsvp_count || 0} attending`;\n\nreturn {\n  json: {\n    event_id: event.id,\n    event_name: event.name,\n    event_url: event.link,\n    event_date: formattedDate,\n    event_timestamp: event.time,\n    duration_hours: ((event.duration || 0) / 3600000).toFixed(1),\n    \n    group_name: event.group?.name || '',\n    group_url: event.group?.link || '',\n    group_members: event.group?.members || 0,\n    \n    venue_name: venueName,\n    venue_address: venueAddress,\n    location: venueInfo,\n    is_online: !event.venue || event.group?.is_simpleEvents || false,\n    \n    rsvp_count: event.yes_rsvp_count || 0,\n    rsvp_limit: event.rsvp_limit || 'Unlimited',\n    rsvp_status: rsvpStatus,\n    waitlist_count: event.waitlist_count || 0,\n    \n    description_preview: (event.description || '').replace(/<[^>]*>/g, ' ').substring(0, 500) + '...',\n    \n    search_location: searchContext.location,\n    search_topic: searchContext.topicName,\n    search_radius_miles: searchContext.radius,\n    \n    fetched_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        400
+      ],
+      "id": "format-event",
+      "name": "Format Event Data"
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "event_id",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        400
+      ],
+      "id": "remove-duplicates",
+      "name": "Remove Duplicate Events"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=2",
+          "mode": "list",
+          "cachedResultName": "Results",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_id": "={{ $json.event_id }}",
+            "event_name": "={{ $json.event_name }}",
+            "event_url": "={{ $json.event_url }}",
+            "event_date": "={{ $json.event_date }}",
+            "group_name": "={{ $json.group_name }}",
+            "group_url": "={{ $json.group_url }}",
+            "group_members": "={{ $json.group_members }}",
+            "venue_name": "={{ $json.venue_name }}",
+            "location": "={{ $json.location }}",
+            "is_online": "={{ $json.is_online }}",
+            "rsvp_count": "={{ $json.rsvp_count }}",
+            "rsvp_status": "={{ $json.rsvp_status }}",
+            "description_preview": "={{ $json.description_preview }}",
+            "search_location": "={{ $json.search_location }}",
+            "search_topic": "={{ $json.search_topic }}",
+            "fetched_at": "={{ $json.fetched_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "event_id",
+              "displayName": "event_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_name",
+              "displayName": "event_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_url",
+              "displayName": "event_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_date",
+              "displayName": "event_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_name",
+              "displayName": "group_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_url",
+              "displayName": "group_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "group_members",
+              "displayName": "group_members",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "venue_name",
+              "displayName": "venue_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "is_online",
+              "displayName": "is_online",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rsvp_count",
+              "displayName": "rsvp_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rsvp_status",
+              "displayName": "rsvp_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "description_preview",
+              "displayName": "description_preview",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "search_location",
+              "displayName": "search_location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "search_topic",
+              "displayName": "search_topic",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "fetched_at",
+              "displayName": "fetched_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2240,
+        400
+      ],
+      "id": "write-results",
+      "name": "Write Results to Sheet"
+    },
+    {
+      "parameters": {
+        "content": "# Meetup API Event Fetcher\n\n## This workflow uses the OFFICIAL Meetup API\n\n### Benefits over HTTP Scraping:\n✅ No anti-bot issues\n✅ Structured JSON data\n✅ Proper pagination\n✅ Location-based search built-in\n✅ Topic filtering\n✅ Legal and supported\n✅ Faster and more reliable\n\n### Requirements:\n1. Meetup API Key (free tier available)\n   - Go to: https://www.meetup.com/api/\n   - Create an OAuth consumer\n   - Get your API key\n\n2. Configure credentials in n8n:\n   - Go to Credentials\n   - Add HTTP Header Auth\n   - Name: Authorization\n   - Value: Bearer YOUR_API_KEY\n\n### Google Sheet Structure:\n\n**Tab 1: Locations**\n- location: City name (e.g., \"San Francisco\")\n- latitude: Lat coordinate (e.g., 37.7749)\n- longitude: Lon coordinate (e.g., -122.4194)\n- radius: Search radius in miles (e.g., 25)\n\n**Tab 2: Topics**\n- topic: Topic name that maps to Meetup category\n  - technology, ai, machine learning\n  - software, programming\n  - blockchain, cryptocurrency\n  - fitness, health\n  - arts, music\n  - etc.\n\n**Tab 3: Results (auto-filled)**\nAll event data including:\n- Event name, URL, date\n- Group info and member count\n- Venue and location details\n- RSVP counts and status\n- Description preview\n\n### Rate Limits:\n- 100 requests per minute (free tier)\n- Workflow includes 1-second delay\n- For heavy usage, increase delay",
+        "height": 1040,
+        "width": 500,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        40
+      ],
+      "id": "api-info-note",
+      "name": "Meetup API Info"
+    },
+    {
+      "parameters": {
+        "content": "## Example Locations Data\n\n| location | latitude | longitude | radius |\n|----------|----------|-----------|--------|\n| San Francisco | 37.7749 | -122.4194 | 25 |\n| New York | 40.7128 | -74.0060 | 30 |\n| London | 51.5074 | -0.1278 | 20 |\n| Berlin | 52.5200 | 13.4050 | 25 |\n\n## Common Topic Mappings\n\n| topic | category_id |\n|-------|-------------|\n| technology | 34 |\n| ai/machine learning | 34 |\n| software | 34 |\n| fitness | 9 |\n| arts | 1 |\n| music | 18 |\n| outdoors | 20 |\n| business | 3 |",
+        "height": 500,
+        "width": 380,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        40
+      ],
+      "id": "example-data-note",
+      "name": "Example Data"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Locations from Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Topics from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Locations from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Create Search Combinations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Topics from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Create Search Combinations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Search Combinations": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit (1s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit (1s)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Meetup API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Meetup API": {
+      "main": [
+        [
+          {
+            "node": "Has Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Events?": {
+      "main": [
+        [
+          {
+            "node": "Split Events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split Events": {
+      "main": [
+        [
+          {
+            "node": "Format Event Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Event Data": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicate Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicate Events": {
+      "main": [
+        [
+          {
+            "node": "Write Results to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "id": "",
+  "tags": []
+}

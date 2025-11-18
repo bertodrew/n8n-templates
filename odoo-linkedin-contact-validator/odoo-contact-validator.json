@@ -1,0 +1,636 @@
+{
+  "name": "Odoo Contact Validator via LinkedIn",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [1],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        480
+      ],
+      "id": "schedule-trigger",
+      "name": "Weekly Schedule (Monday 9AM)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        280
+      ],
+      "id": "manual-trigger",
+      "name": "Manual Trigger (Testing)"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ODOO_URL }}/web/dataset/call_kw",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "jsonrpc",
+              "value": "2.0"
+            },
+            {
+              "name": "method",
+              "value": "call"
+            },
+            {
+              "name": "id",
+              "value": "={{ $now.toMillis() }}"
+            }
+          ]
+        },
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"id\": {{ $now.toMillis() }},\n  \"params\": {\n    \"model\": \"res.partner\",\n    \"method\": \"search_read\",\n    \"args\": [],\n    \"kwargs\": {\n      \"domain\": [\n        [\"is_company\", \"=\", false],\n        [\"parent_id\", \"!=\", false],\n        [\"active\", \"=\", true]\n      ],\n      \"fields\": [\"id\", \"name\", \"email\", \"function\", \"parent_id\", \"x_linkedin_url\", \"x_last_verified\", \"x_verification_status\"],\n      \"limit\": 100\n    }\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        380
+      ],
+      "id": "fetch-odoo-contacts",
+      "name": "Fetch Contacts from Odoo",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Odoo API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract contacts from Odoo response and prepare for validation\nconst response = $input.item.json;\n\nif (!response.result || !Array.isArray(response.result)) {\n  throw new Error('Invalid Odoo response: ' + JSON.stringify(response));\n}\n\nconst contacts = response.result;\nconst today = new Date();\nconst thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);\n\n// Filter contacts that need verification\nconst contactsToVerify = contacts.filter(contact => {\n  // Skip if verified within last 30 days\n  if (contact.x_last_verified) {\n    const lastVerified = new Date(contact.x_last_verified);\n    if (lastVerified > thirtyDaysAgo) {\n      return false;\n    }\n  }\n  \n  // Must have a parent company\n  if (!contact.parent_id) {\n    return false;\n  }\n  \n  return true;\n}).map(contact => ({\n  odoo_id: contact.id,\n  name: contact.name,\n  email: contact.email || '',\n  job_title: contact.function || '',\n  company_id: contact.parent_id[0],\n  company_name: contact.parent_id[1],\n  linkedin_url: contact.x_linkedin_url || '',\n  last_verified: contact.x_last_verified,\n  current_status: contact.x_verification_status || 'unverified'\n}));\n\n// Return limited batch (respect API quota)\nconst DAILY_LIMIT = 50;\nconst batch = contactsToVerify.slice(0, DAILY_LIMIT);\n\nif (batch.length === 0) {\n  return {\n    json: {\n      message: 'No contacts need verification today',\n      total_contacts: contacts.length,\n      batch_size: 0\n    }\n  };\n}\n\nreturn batch.map(contact => ({ json: contact }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        380
+      ],
+      "id": "prepare-contacts",
+      "name": "Filter & Prepare Contacts"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-linkedin",
+              "leftValue": "={{ $json.linkedin_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        380
+      ],
+      "id": "check-linkedin-url",
+      "name": "Has LinkedIn URL?"
+    },
+    {
+      "parameters": {
+        "amount": 5000,
+        "unit": "milliseconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1140,
+        300
+      ],
+      "id": "rate-limit-1",
+      "name": "Rate Limit (5s)"
+    },
+    {
+      "parameters": {
+        "url": "https://nubela.co/proxycurl/api/v2/linkedin",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $json.linkedin_url }}"
+            },
+            {
+              "name": "use_cache",
+              "value": "if-present"
+            },
+            {
+              "name": "fallback_to_cache",
+              "value": "on-error"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        300
+      ],
+      "id": "fetch-linkedin-profile",
+      "name": "Fetch LinkedIn Profile (Proxycurl)",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Proxycurl API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate contact employment status\nconst contact = $('Rate Limit (5s)').item.json;\nconst linkedinResponse = $input.item.json;\n\nlet verificationResult = {\n  odoo_id: contact.odoo_id,\n  name: contact.name,\n  company_name: contact.company_name,\n  linkedin_url: contact.linkedin_url,\n  status: 'unable_to_verify',\n  confidence: 0,\n  notes: '',\n  current_company_linkedin: '',\n  new_job_title: '',\n  verified_at: new Date().toISOString()\n};\n\n// Check for API errors\nif (linkedinResponse.statusCode && linkedinResponse.statusCode !== 200) {\n  verificationResult.notes = `API Error: ${linkedinResponse.statusCode}`;\n  return { json: verificationResult };\n}\n\nconst profile = linkedinResponse.body || linkedinResponse;\n\nif (!profile || !profile.experiences) {\n  verificationResult.notes = 'No experience data found';\n  return { json: verificationResult };\n}\n\n// Find current job (most recent experience without end date)\nconst currentJobs = (profile.experiences || []).filter(exp => {\n  return exp.ends_at === null || exp.ends_at === undefined;\n});\n\nif (currentJobs.length === 0) {\n  verificationResult.status = 'left_company';\n  verificationResult.notes = 'No current employment found';\n  verificationResult.confidence = 80;\n  return { json: verificationResult };\n}\n\n// Check if any current job matches our company\nconst companyNameNormalized = contact.company_name.toLowerCase()\n  .replace(/\\s+(inc|llc|ltd|corp|corporation|gmbh|ag|sa|srl)[\\.\\s]*$/i, '')\n  .trim();\n\nlet matchFound = false;\nlet currentCompanyNames = [];\n\nfor (const job of currentJobs) {\n  const linkedinCompany = (job.company || '').toLowerCase()\n    .replace(/\\s+(inc|llc|ltd|corp|corporation|gmbh|ag|sa|srl)[\\.\\s]*$/i, '')\n    .trim();\n  \n  currentCompanyNames.push(job.company);\n  \n  // Check for match (exact or partial)\n  if (linkedinCompany === companyNameNormalized ||\n      linkedinCompany.includes(companyNameNormalized) ||\n      companyNameNormalized.includes(linkedinCompany)) {\n    matchFound = true;\n    verificationResult.current_company_linkedin = job.company;\n    verificationResult.new_job_title = job.title || '';\n    break;\n  }\n}\n\nif (matchFound) {\n  verificationResult.status = 'verified';\n  verificationResult.confidence = 95;\n  verificationResult.notes = `Confirmed: Still at ${verificationResult.current_company_linkedin}`;\n  if (verificationResult.new_job_title && \n      verificationResult.new_job_title !== contact.job_title) {\n    verificationResult.notes += `. Title changed: ${contact.job_title} → ${verificationResult.new_job_title}`;\n  }\n} else {\n  verificationResult.status = 'left_company';\n  verificationResult.confidence = 90;\n  verificationResult.current_company_linkedin = currentCompanyNames.join(', ');\n  verificationResult.notes = `No longer at ${contact.company_name}. Current: ${currentCompanyNames.join(', ')}`;\n}\n\nreturn { json: verificationResult };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        300
+      ],
+      "id": "validate-employment",
+      "name": "Validate Employment Status"
+    },
+    {
+      "parameters": {
+        "amount": 5000,
+        "unit": "milliseconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1140,
+        460
+      ],
+      "id": "rate-limit-2",
+      "name": "Rate Limit (5s)"
+    },
+    {
+      "parameters": {
+        "url": "https://nubela.co/proxycurl/api/linkedin/company/employees/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "company_name",
+              "value": "={{ encodeURIComponent($json.company_name) }}"
+            },
+            {
+              "name": "keyword_regex",
+              "value": "={{ encodeURIComponent($json.name) }}"
+            },
+            {
+              "name": "enrich_profiles",
+              "value": "enrich"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        460
+      ],
+      "id": "search-person-at-company",
+      "name": "Search Person at Company (Proxycurl)",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Proxycurl API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Try to find person at company without LinkedIn URL\nconst contact = $('Rate Limit (5s)1').item.json;\nconst searchResponse = $input.item.json;\n\nlet verificationResult = {\n  odoo_id: contact.odoo_id,\n  name: contact.name,\n  company_name: contact.company_name,\n  linkedin_url: '',\n  status: 'unable_to_verify',\n  confidence: 0,\n  notes: 'No LinkedIn URL - searched by name',\n  current_company_linkedin: '',\n  new_job_title: '',\n  verified_at: new Date().toISOString()\n};\n\n// Check for API errors\nif (searchResponse.statusCode && searchResponse.statusCode !== 200) {\n  verificationResult.notes = `Search API Error: ${searchResponse.statusCode}`;\n  return { json: verificationResult };\n}\n\nconst results = searchResponse.body?.employees || searchResponse.employees || [];\n\nif (results.length === 0) {\n  verificationResult.notes = `No matches found for \"${contact.name}\" at \"${contact.company_name}\"`;\n  return { json: verificationResult };\n}\n\n// Find best match by name similarity\nconst contactNameParts = contact.name.toLowerCase().split(/\\s+/);\n\nfor (const employee of results) {\n  const employeeName = (employee.profile?.full_name || '').toLowerCase();\n  const matchScore = contactNameParts.filter(part => \n    employeeName.includes(part)\n  ).length / contactNameParts.length;\n  \n  if (matchScore >= 0.8) { // 80% name match\n    verificationResult.status = 'verified';\n    verificationResult.confidence = 85;\n    verificationResult.linkedin_url = employee.profile?.public_identifier \n      ? `https://linkedin.com/in/${employee.profile.public_identifier}`\n      : '';\n    verificationResult.current_company_linkedin = contact.company_name;\n    verificationResult.new_job_title = employee.profile?.headline || '';\n    verificationResult.notes = `Found match: ${employee.profile?.full_name}. LinkedIn URL discovered.`;\n    break;\n  }\n}\n\nif (verificationResult.status === 'unable_to_verify') {\n  verificationResult.notes = `No strong name match found. Best results: ${results.slice(0, 3).map(e => e.profile?.full_name).join(', ')}`;\n  verificationResult.confidence = 30;\n}\n\nreturn { json: verificationResult };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        460
+      ],
+      "id": "process-search-result",
+      "name": "Process Search Results"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1800,
+        380
+      ],
+      "id": "merge-results",
+      "name": "Merge Verification Results"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ODOO_URL }}/web/dataset/call_kw",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"id\": {{ $now.toMillis() }},\n  \"params\": {\n    \"model\": \"res.partner\",\n    \"method\": \"write\",\n    \"args\": [\n      [{{ $json.odoo_id }}],\n      {\n        \"x_last_verified\": \"{{ $json.verified_at }}\",\n        \"x_verification_status\": \"{{ $json.status }}\",\n        \"x_verification_notes\": \"{{ $json.notes }}\",\n        \"x_linkedin_url\": \"{{ $json.linkedin_url || '' }}\",\n        \"function\": \"{{ $json.new_job_title || '' }}\"\n      }\n    ],\n    \"kwargs\": {}\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2020,
+        380
+      ],
+      "id": "update-odoo-contact",
+      "name": "Update Contact in Odoo",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Odoo API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all results for summary report\nconst allResults = $input.all();\n\nconst summary = {\n  total_processed: allResults.length,\n  verified: 0,\n  left_company: 0,\n  unable_to_verify: 0,\n  linkedin_urls_discovered: 0,\n  title_changes: 0,\n  details: []\n};\n\nfor (const item of allResults) {\n  const result = item.json;\n  \n  switch (result.status) {\n    case 'verified':\n      summary.verified++;\n      break;\n    case 'left_company':\n      summary.left_company++;\n      break;\n    default:\n      summary.unable_to_verify++;\n  }\n  \n  if (result.notes && result.notes.includes('LinkedIn URL discovered')) {\n    summary.linkedin_urls_discovered++;\n  }\n  \n  if (result.notes && result.notes.includes('Title changed')) {\n    summary.title_changes++;\n  }\n  \n  summary.details.push({\n    name: result.name,\n    company: result.company_name,\n    status: result.status,\n    confidence: result.confidence,\n    notes: result.notes\n  });\n}\n\nsummary.run_date = new Date().toISOString();\nsummary.report = `\n# Contact Validation Report\nDate: ${new Date().toLocaleDateString()}\n\n## Summary\n- Total Processed: ${summary.total_processed}\n- ✅ Verified (Still Employed): ${summary.verified}\n- ⚠️ Left Company: ${summary.left_company}\n- ❓ Unable to Verify: ${summary.unable_to_verify}\n- 🔗 LinkedIn URLs Discovered: ${summary.linkedin_urls_discovered}\n- 📝 Title Changes Detected: ${summary.title_changes}\n\n## Actions Required\n- Review ${summary.left_company} contacts who may have left their companies\n- Update ${summary.unable_to_verify} contacts with missing information\n`;\n\nreturn { json: summary };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        380
+      ],
+      "id": "generate-report",
+      "name": "Generate Summary Report"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Validation Log",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_date": "={{ $json.run_date }}",
+            "total_processed": "={{ $json.total_processed }}",
+            "verified": "={{ $json.verified }}",
+            "left_company": "={{ $json.left_company }}",
+            "unable_to_verify": "={{ $json.unable_to_verify }}",
+            "linkedin_discovered": "={{ $json.linkedin_urls_discovered }}",
+            "title_changes": "={{ $json.title_changes }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "run_date",
+              "displayName": "run_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_processed",
+              "displayName": "total_processed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "verified",
+              "displayName": "verified",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "left_company",
+              "displayName": "left_company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "unable_to_verify",
+              "displayName": "unable_to_verify",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "linkedin_discovered",
+              "displayName": "linkedin_discovered",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "title_changes",
+              "displayName": "title_changes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2460,
+        380
+      ],
+      "id": "log-to-sheet",
+      "name": "Log Run to Google Sheet"
+    },
+    {
+      "parameters": {
+        "content": "# Odoo Contact Validator via LinkedIn\n\n## Purpose\nAutomatically verify if contacts in Odoo still work at their listed companies using LinkedIn data via Proxycurl API.\n\n## Features\n✅ Fetches contacts from Odoo API\n✅ Verifies employment via LinkedIn profiles\n✅ Detects job title changes\n✅ Discovers LinkedIn URLs for contacts without them\n✅ Updates Odoo with verification results\n✅ Generates summary reports\n✅ Respects API rate limits (5s delay)\n\n## Requirements\n\n### 1. Proxycurl API Account\n- Sign up at: https://nubela.co/proxycurl/\n- Get API key\n- Cost: ~$0.10-0.30 per request\n- Create HTTP Header Auth credential:\n  - Header Name: Authorization\n  - Header Value: Bearer YOUR_API_KEY\n\n### 2. Odoo Configuration\n- Custom fields on res.partner:\n  - x_linkedin_url (Char)\n  - x_last_verified (Datetime)\n  - x_verification_status (Selection)\n  - x_verification_notes (Text)\n- API access enabled\n- HTTP Basic Auth or API Key\n\n### 3. Environment Variables\n- ODOO_URL: Your Odoo instance URL\n\n## Rate Limiting\n- 5 second delay between API calls\n- Processes max 50 contacts per run\n- Weekly schedule (adjustable)\n- Skips recently verified (< 30 days)\n\n## Cost Estimation\n- 50 contacts × $0.10 = $5/week\n- 200 contacts/month = ~$20/month",
+        "height": 880,
+        "width": 460,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        40
+      ],
+      "id": "main-info-note",
+      "name": "Workflow Info"
+    },
+    {
+      "parameters": {
+        "content": "## Verification Flow\n\n1. Contact HAS LinkedIn URL\n   → Fetch profile directly\n   → Check current employment\n   → Compare with Odoo company\n\n2. Contact has NO LinkedIn URL\n   → Search by name at company\n   → Find best match\n   → Discover LinkedIn URL\n\nResults:\n- ✅ Verified: Still works there\n- ⚠️ Left Company: Different employer\n- ❓ Unable to Verify: No data",
+        "height": 380,
+        "width": 320,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        880,
+        40
+      ],
+      "id": "flow-note",
+      "name": "Verification Logic"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Weekly Schedule (Monday 9AM)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Contacts from Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger (Testing)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Contacts from Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Contacts from Odoo": {
+      "main": [
+        [
+          {
+            "node": "Filter & Prepare Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Prepare Contacts": {
+      "main": [
+        [
+          {
+            "node": "Has LinkedIn URL?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has LinkedIn URL?": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit (5s)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rate Limit (5s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit (5s)": {
+      "main": [
+        [
+          {
+            "node": "Fetch LinkedIn Profile (Proxycurl)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Person at Company (Proxycurl)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch LinkedIn Profile (Proxycurl)": {
+      "main": [
+        [
+          {
+            "node": "Validate Employment Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Employment Status": {
+      "main": [
+        [
+          {
+            "node": "Merge Verification Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Person at Company (Proxycurl)": {
+      "main": [
+        [
+          {
+            "node": "Process Search Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Search Results": {
+      "main": [
+        [
+          {
+            "node": "Merge Verification Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Verification Results": {
+      "main": [
+        [
+          {
+            "node": "Update Contact in Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Contact in Odoo": {
+      "main": [
+        [
+          {
+            "node": "Generate Summary Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Summary Report": {
+      "main": [
+        [
+          {
+            "node": "Log Run to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "id": "",
+  "tags": []
+}

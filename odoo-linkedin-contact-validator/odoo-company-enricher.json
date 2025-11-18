@@ -1,0 +1,627 @@
+{
+  "name": "Odoo Company Executive Enricher via LinkedIn",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "triggerAtDayOfMonth": 1,
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        480
+      ],
+      "id": "schedule-trigger",
+      "name": "Monthly Schedule (1st at 10AM)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        280
+      ],
+      "id": "manual-trigger",
+      "name": "Manual Trigger (Testing)"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ODOO_URL }}/web/dataset/call_kw",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"id\": {{ $now.toMillis() }},\n  \"params\": {\n    \"model\": \"res.partner\",\n    \"method\": \"search_read\",\n    \"args\": [],\n    \"kwargs\": {\n      \"domain\": [\n        [\"is_company\", \"=\", true],\n        [\"active\", \"=\", true],\n        [\"child_ids\", \"=\", false]\n      ],\n      \"fields\": [\"id\", \"name\", \"website\", \"email\", \"x_linkedin_company_url\", \"x_last_enriched\", \"x_needs_enrichment\"],\n      \"limit\": 50\n    }\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        380
+      ],
+      "id": "fetch-companies-odoo",
+      "name": "Fetch Companies Without Contacts",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Odoo API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process companies that need enrichment\nconst response = $input.item.json;\n\nif (!response.result || !Array.isArray(response.result)) {\n  throw new Error('Invalid Odoo response');\n}\n\nconst companies = response.result;\nconst today = new Date();\nconst sixtyDaysAgo = new Date(today.getTime() - 60 * 24 * 60 * 60 * 1000);\n\n// Filter companies needing enrichment\nconst companiesToEnrich = companies.filter(company => {\n  // Skip if enriched in last 60 days\n  if (company.x_last_enriched) {\n    const lastEnriched = new Date(company.x_last_enriched);\n    if (lastEnriched > sixtyDaysAgo) {\n      return false;\n    }\n  }\n  return true;\n}).map(company => ({\n  odoo_id: company.id,\n  company_name: company.name,\n  website: company.website || '',\n  email: company.email || '',\n  linkedin_company_url: company.x_linkedin_company_url || '',\n  last_enriched: company.x_last_enriched\n}));\n\n// Limit batch size (API quota)\nconst BATCH_LIMIT = 20;\nconst batch = companiesToEnrich.slice(0, BATCH_LIMIT);\n\nif (batch.length === 0) {\n  return {\n    json: {\n      message: 'No companies need enrichment',\n      total_companies: companies.length,\n      batch_size: 0\n    }\n  };\n}\n\nreturn batch.map(company => ({ json: company }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        380
+      ],
+      "id": "prepare-companies",
+      "name": "Filter Companies Needing Enrichment"
+    },
+    {
+      "parameters": {
+        "amount": 10000,
+        "unit": "milliseconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        380
+      ],
+      "id": "rate-limit-main",
+      "name": "Rate Limit (10s)"
+    },
+    {
+      "parameters": {
+        "url": "https://nubela.co/proxycurl/api/linkedin/company/employees/",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "company_name",
+              "value": "={{ encodeURIComponent($json.company_name) }}"
+            },
+            {
+              "name": "enrich_profiles",
+              "value": "enrich"
+            },
+            {
+              "name": "role_search",
+              "value": "\"ceo\" OR \"cto\" OR \"cio\" OR \"cdo\" OR \"chief\" OR \"vp\" OR \"vice president\" OR \"director\" OR \"head of\" OR \"founder\" OR \"owner\""
+            },
+            {
+              "name": "page_size",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        380
+      ],
+      "id": "search-executives",
+      "name": "Search Executives (Proxycurl)",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Proxycurl API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process executive search results\nconst company = $('Rate Limit (10s)').item.json;\nconst searchResponse = $input.item.json;\n\nconst result = {\n  odoo_company_id: company.odoo_id,\n  company_name: company.company_name,\n  executives_found: [],\n  total_found: 0,\n  api_status: 'success',\n  enriched_at: new Date().toISOString(),\n  notes: ''\n};\n\n// Check for API errors\nif (searchResponse.statusCode && searchResponse.statusCode !== 200) {\n  result.api_status = 'error';\n  result.notes = `API Error: ${searchResponse.statusCode}`;\n  return { json: result };\n}\n\nconst employees = searchResponse.body?.employees || searchResponse.employees || [];\n\nif (employees.length === 0) {\n  result.notes = 'No executives found matching criteria';\n  return { json: result };\n}\n\n// Priority roles (in order of importance)\nconst priorityRoles = [\n  'ceo', 'chief executive',\n  'cto', 'chief technology',\n  'cio', 'chief information',\n  'cdo', 'chief digital', 'chief data',\n  'cso', 'chief sales', 'chief strategy',\n  'cfo', 'chief financial',\n  'coo', 'chief operating',\n  'cmo', 'chief marketing',\n  'founder', 'co-founder',\n  'owner',\n  'president',\n  'vp', 'vice president',\n  'director',\n  'head of',\n  'board member', 'board of directors'\n];\n\n// Extract and rank executives\nconst processedExecs = [];\n\nfor (const emp of employees) {\n  const profile = emp.profile;\n  if (!profile) continue;\n  \n  const title = (profile.headline || profile.occupation || '').toLowerCase();\n  const fullName = profile.full_name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim();\n  \n  if (!fullName) continue;\n  \n  // Calculate priority score\n  let priorityScore = 100;\n  for (let i = 0; i < priorityRoles.length; i++) {\n    if (title.includes(priorityRoles[i])) {\n      priorityScore = i;\n      break;\n    }\n  }\n  \n  // Extract email if available\n  let email = '';\n  if (profile.personal_emails && profile.personal_emails.length > 0) {\n    email = profile.personal_emails[0];\n  } else if (emp.email) {\n    email = emp.email;\n  }\n  \n  processedExecs.push({\n    name: fullName,\n    title: profile.headline || profile.occupation || 'Executive',\n    linkedin_url: profile.public_identifier \n      ? `https://linkedin.com/in/${profile.public_identifier}`\n      : profile.linkedin_profile_url || '',\n    email: email,\n    location: profile.city || profile.country || '',\n    seniority: priorityScore < 10 ? 'C-Suite' : (priorityScore < 20 ? 'VP/Director' : 'Manager'),\n    priority_score: priorityScore,\n    summary: (profile.summary || '').substring(0, 200)\n  });\n}\n\n// Sort by priority and take top executives\nprocessedExecs.sort((a, b) => a.priority_score - b.priority_score);\nconst topExecutives = processedExecs.slice(0, 5); // Max 5 per company\n\nresult.executives_found = topExecutives;\nresult.total_found = topExecutives.length;\nresult.notes = `Found ${topExecutives.length} executives (${processedExecs.length} total matches)`;\n\nreturn { json: result };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        380
+      ],
+      "id": "process-executives",
+      "name": "Process & Rank Executives"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-executives",
+              "leftValue": "={{ $json.total_found }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1580,
+        380
+      ],
+      "id": "has-executives",
+      "name": "Found Executives?"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "executives_found",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        300
+      ],
+      "id": "split-executives",
+      "name": "Split Executives"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ODOO_URL }}/web/dataset/call_kw",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"id\": {{ $now.toMillis() }},\n  \"params\": {\n    \"model\": \"res.partner\",\n    \"method\": \"create\",\n    \"args\": [\n      {\n        \"name\": \"{{ $json.name }}\",\n        \"is_company\": false,\n        \"parent_id\": {{ $json.odoo_company_id }},\n        \"function\": \"{{ $json.title }}\",\n        \"email\": \"{{ $json.email }}\",\n        \"x_linkedin_url\": \"{{ $json.linkedin_url }}\",\n        \"x_enrichment_source\": \"linkedin_api\",\n        \"x_seniority_level\": \"{{ $json.seniority }}\",\n        \"x_verification_status\": \"verified\",\n        \"x_last_verified\": \"{{ $now.toISO() }}\",\n        \"comment\": \"Auto-imported from LinkedIn via Proxycurl. {{ $json.summary }}\"\n      }\n    ],\n    \"kwargs\": {}\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2020,
+        300
+      ],
+      "id": "create-contact-odoo",
+      "name": "Create Contact in Odoo",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Odoo API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Track created contacts per company\nconst createdContacts = $input.all();\nconst companyData = $('Process & Rank Executives').item.json;\n\nconst result = {\n  odoo_company_id: companyData.odoo_company_id,\n  company_name: companyData.company_name,\n  contacts_created: createdContacts.length,\n  contact_ids: [],\n  enriched_at: companyData.enriched_at\n};\n\nfor (const contact of createdContacts) {\n  if (contact.json.result) {\n    result.contact_ids.push(contact.json.result);\n  }\n}\n\nreturn { json: result };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        300
+      ],
+      "id": "aggregate-created",
+      "name": "Aggregate Created Contacts"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ODOO_URL }}/web/dataset/call_kw",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"id\": {{ $now.toMillis() }},\n  \"params\": {\n    \"model\": \"res.partner\",\n    \"method\": \"write\",\n    \"args\": [\n      [{{ $json.odoo_company_id }}],\n      {\n        \"x_last_enriched\": \"{{ $json.enriched_at }}\",\n        \"x_needs_enrichment\": false,\n        \"x_enrichment_notes\": \"Added {{ $json.contacts_created }} executive contacts via LinkedIn API\"\n      }\n    ],\n    \"kwargs\": {}\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2460,
+        300
+      ],
+      "id": "update-company-odoo",
+      "name": "Update Company Enrichment Status",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Odoo API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ODOO_URL }}/web/dataset/call_kw",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"call\",\n  \"id\": {{ $now.toMillis() }},\n  \"params\": {\n    \"model\": \"res.partner\",\n    \"method\": \"write\",\n    \"args\": [\n      [{{ $json.odoo_company_id }}],\n      {\n        \"x_last_enriched\": \"{{ $json.enriched_at }}\",\n        \"x_needs_enrichment\": true,\n        \"x_enrichment_notes\": \"{{ $json.notes }}\"\n      }\n    ],\n    \"kwargs\": {}\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        460
+      ],
+      "id": "update-company-no-execs",
+      "name": "Mark Company (No Executives Found)",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "",
+          "name": "Odoo API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2680,
+        380
+      ],
+      "id": "merge-all-results",
+      "name": "Merge All Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate final enrichment report\nconst allResults = $input.all();\n\nconst summary = {\n  run_date: new Date().toISOString(),\n  companies_processed: allResults.length,\n  total_contacts_created: 0,\n  companies_with_executives: 0,\n  companies_without_executives: 0,\n  contacts_by_company: [],\n  api_errors: 0\n};\n\nfor (const item of allResults) {\n  const data = item.json;\n  \n  if (data.contacts_created && data.contacts_created > 0) {\n    summary.companies_with_executives++;\n    summary.total_contacts_created += data.contacts_created;\n    summary.contacts_by_company.push({\n      company: data.company_name,\n      contacts_added: data.contacts_created\n    });\n  } else {\n    summary.companies_without_executives++;\n  }\n}\n\nsummary.report = `\n# Company Enrichment Report\nDate: ${new Date().toLocaleDateString()}\n\n## Summary\n- Companies Processed: ${summary.companies_processed}\n- ✅ Successfully Enriched: ${summary.companies_with_executives}\n- ⚠️ No Executives Found: ${summary.companies_without_executives}\n- 👥 Total Contacts Created: ${summary.total_contacts_created}\n\n## Contacts Added by Company\n${summary.contacts_by_company.map(c => `- ${c.company}: ${c.contacts_added} executives`).join('\\n')}\n\n## Next Steps\n- Review ${summary.companies_without_executives} companies that need manual research\n- Verify newly added executive contact information\n- Check for duplicate contacts\n`;\n\nreturn { json: summary };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2900,
+        380
+      ],
+      "id": "generate-report",
+      "name": "Generate Enrichment Report"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Enrichment Log",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_date": "={{ $json.run_date }}",
+            "companies_processed": "={{ $json.companies_processed }}",
+            "companies_enriched": "={{ $json.companies_with_executives }}",
+            "companies_no_results": "={{ $json.companies_without_executives }}",
+            "total_contacts_created": "={{ $json.total_contacts_created }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "run_date",
+              "displayName": "run_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "companies_processed",
+              "displayName": "companies_processed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "companies_enriched",
+              "displayName": "companies_enriched",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "companies_no_results",
+              "displayName": "companies_no_results",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "total_contacts_created",
+              "displayName": "total_contacts_created",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3120,
+        380
+      ],
+      "id": "log-enrichment",
+      "name": "Log Enrichment to Sheet"
+    },
+    {
+      "parameters": {
+        "content": "# Odoo Company Executive Enricher\n\n## Purpose\nAutomatically discover and add key executives (CEO, CTO, CDO, CIO, CSO, Board Members) to companies in Odoo that lack contact information.\n\n## Target Executives\n- CEO / Chief Executive Officer\n- CTO / Chief Technology Officer\n- CDO / Chief Digital Officer / Chief Data Officer\n- CIO / Chief Information Officer\n- CSO / Chief Sales Officer / Chief Strategy Officer\n- CFO / Chief Financial Officer\n- COO / Chief Operating Officer\n- CMO / Chief Marketing Officer\n- Founders / Co-Founders / Owners\n- Vice Presidents (VP)\n- Directors\n- Board Members\n\n## Features\n✅ Searches executives by company name\n✅ Ranks by seniority (C-Suite → VP → Director)\n✅ Creates contacts directly in Odoo\n✅ Links contacts to parent company\n✅ Captures LinkedIn URLs and emails\n✅ Avoids duplicate enrichment (60-day cooldown)\n✅ Respects API rate limits (10s delay)\n\n## Requirements\n\n### Proxycurl API\n- Employee search endpoint\n- Cost: ~$0.30-0.50 per company search\n- Max 20 companies per monthly run = $10/month\n\n### Odoo Custom Fields\nOn res.partner:\n- x_linkedin_url\n- x_last_enriched\n- x_needs_enrichment\n- x_enrichment_source\n- x_seniority_level\n- x_enrichment_notes\n\n## Cost Estimation\n20 companies × $0.50 = $10/month\n+ Creating contacts (free)\n= ~$10-15/month total",
+        "height": 920,
+        "width": 460,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        40
+      ],
+      "id": "main-info-note",
+      "name": "Enrichment Workflow Info"
+    },
+    {
+      "parameters": {
+        "content": "## Enrichment Flow\n\n1. Fetch companies without contacts\n2. Search for executives via Proxycurl\n3. Rank by seniority (CEO > CTO > VP...)\n4. Take top 5 executives per company\n5. Create contacts in Odoo\n6. Link to parent company\n7. Mark company as enriched\n\nData Captured:\n- Full name\n- Job title\n- LinkedIn URL\n- Email (if available)\n- Seniority level\n- Location\n- Summary/Bio",
+        "height": 380,
+        "width": 320,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        40
+      ],
+      "id": "flow-note",
+      "name": "Enrichment Logic"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Monthly Schedule (1st at 10AM)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Companies Without Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger (Testing)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Companies Without Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Companies Without Contacts": {
+      "main": [
+        [
+          {
+            "node": "Filter Companies Needing Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Companies Needing Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Rate Limit (10s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rate Limit (10s)": {
+      "main": [
+        [
+          {
+            "node": "Search Executives (Proxycurl)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Executives (Proxycurl)": {
+      "main": [
+        [
+          {
+            "node": "Process & Rank Executives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process & Rank Executives": {
+      "main": [
+        [
+          {
+            "node": "Found Executives?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Found Executives?": {
+      "main": [
+        [
+          {
+            "node": "Split Executives",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Company (No Executives Found)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Executives": {
+      "main": [
+        [
+          {
+            "node": "Create Contact in Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Contact in Odoo": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Created Contacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Created Contacts": {
+      "main": [
+        [
+          {
+            "node": "Update Company Enrichment Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Company Enrichment Status": {
+      "main": [
+        [
+          {
+            "node": "Merge All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Company (No Executives Found)": {
+      "main": [
+        [
+          {
+            "node": "Merge All Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All Results": {
+      "main": [
+        [
+          {
+            "node": "Generate Enrichment Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Enrichment Report": {
+      "main": [
+        [
+          {
+            "node": "Log Enrichment to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "id": "",
+  "tags": []
+}

@@ -1,0 +1,968 @@
+{
+  "name": "Google Sheet URL Event Scraper (Enhanced)",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        480
+      ],
+      "id": "manual-trigger-1",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "URLs",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        380
+      ],
+      "id": "read-urls-sheet",
+      "name": "Read URLs from Sheet"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=1",
+          "mode": "list",
+          "cachedResultName": "Topics",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        580
+      ],
+      "id": "read-topics-sheet",
+      "name": "Read Topics from Sheet"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=3",
+          "mode": "list",
+          "cachedResultName": "Locations",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        780
+      ],
+      "id": "read-locations-sheet",
+      "name": "Read Locations from Sheet"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge URLs, Topics, and Locations data\nconst topicList = $('Read Topics from Sheet').all().map(item => {\n  return item.json.topic || item.json.Topic || Object.values(item.json)[0];\n}).filter(topic => topic && topic.trim() !== '');\n\nconst locationList = $('Read Locations from Sheet').all().map(item => {\n  return item.json.location || item.json.Location || Object.values(item.json)[0];\n}).filter(loc => loc && loc.trim() !== '');\n\nconst urlList = $('Read URLs from Sheet').all().map(item => {\n  return {\n    url: item.json.url || item.json.URL || Object.values(item.json)[0],\n    name: item.json.name || item.json.Name || Object.values(item.json)[1] || 'Unknown',\n    maxPages: parseInt(item.json.max_pages || item.json.maxPages || 3),\n    delayMs: parseInt(item.json.delay_ms || item.json.delayMs || 2000)\n  };\n}).filter(item => item.url && item.url.trim() !== '');\n\nreturn {\n  json: {\n    urls: urlList,\n    topics: topicList,\n    locations: locationList,\n    topicsString: topicList.join(', '),\n    locationsString: locationList.join(', ')\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        580
+      ],
+      "id": "merge-data",
+      "name": "Merge URLs, Topics & Locations"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "urls",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        920,
+        580
+      ],
+      "id": "split-urls",
+      "name": "Split URLs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pagination handler - generates URLs for multiple pages\nconst baseUrl = $input.item.json.url;\nconst maxPages = $input.item.json.maxPages || 3;\nconst name = $input.item.json.name;\nconst delayMs = $input.item.json.delayMs || 2000;\nconst topics = $input.item.json.topics;\nconst locations = $input.item.json.locations;\n\nconst pageUrls = [];\n\n// Detect site type and generate paginated URLs\nif (baseUrl.includes('meetup.com')) {\n  // Meetup pagination: uses offset parameter\n  for (let i = 0; i < maxPages; i++) {\n    const offset = i * 20;\n    let url = baseUrl;\n    if (url.includes('?')) {\n      url += `&offset=${offset}`;\n    } else {\n      url += `?offset=${offset}`;\n    }\n    pageUrls.push({\n      url: url,\n      page: i + 1,\n      name: name,\n      delayMs: delayMs,\n      topics: topics,\n      locations: locations,\n      siteType: 'meetup'\n    });\n  }\n} else if (baseUrl.includes('eventbrite.com')) {\n  // Eventbrite pagination: uses page parameter\n  for (let i = 1; i <= maxPages; i++) {\n    let url = baseUrl;\n    if (url.includes('?')) {\n      url += `&page=${i}`;\n    } else {\n      url += `?page=${i}`;\n    }\n    pageUrls.push({\n      url: url,\n      page: i,\n      name: name,\n      delayMs: delayMs,\n      topics: topics,\n      locations: locations,\n      siteType: 'eventbrite'\n    });\n  }\n} else {\n  // Generic - just scrape the single URL\n  pageUrls.push({\n    url: baseUrl,\n    page: 1,\n    name: name,\n    delayMs: delayMs,\n    topics: topics,\n    locations: locations,\n    siteType: 'generic'\n  });\n}\n\nreturn pageUrls.map(p => ({ json: p }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        580
+      ],
+      "id": "generate-pagination",
+      "name": "Generate Paginated URLs"
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.delayMs }}",
+        "unit": "milliseconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1360,
+        580
+      ],
+      "id": "rate-limit-delay",
+      "name": "Anti-Rate-Limit Delay"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            },
+            {
+              "name": "Accept-Encoding",
+              "value": "gzip, deflate, br"
+            },
+            {
+              "name": "DNT",
+              "value": "1"
+            },
+            {
+              "name": "Connection",
+              "value": "keep-alive"
+            },
+            {
+              "name": "Upgrade-Insecure-Requests",
+              "value": "1"
+            },
+            {
+              "name": "Sec-Fetch-Dest",
+              "value": "document"
+            },
+            {
+              "name": "Sec-Fetch-Mode",
+              "value": "navigate"
+            },
+            {
+              "name": "Sec-Fetch-Site",
+              "value": "none"
+            },
+            {
+              "name": "Sec-Fetch-User",
+              "value": "?1"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "max-age=0"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 10
+            }
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1580,
+        580
+      ],
+      "id": "scrape-url",
+      "name": "Scrape with Anti-Bot Headers",
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-status",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1800,
+        580
+      ],
+      "id": "check-response",
+      "name": "Request Successful?"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced event extraction with location awareness\nconst responseData = $input.item.json;\nconst html = responseData.body || responseData.data || '';\nconst statusCode = responseData.statusCode;\nconst url = $('Anti-Rate-Limit Delay').item.json.url;\nconst page = $('Anti-Rate-Limit Delay').item.json.page;\nconst name = $('Anti-Rate-Limit Delay').item.json.name;\nconst topics = $('Anti-Rate-Limit Delay').item.json.topics;\nconst locations = $('Anti-Rate-Limit Delay').item.json.locations;\nconst siteType = $('Anti-Rate-Limit Delay').item.json.siteType;\n\n// Check for anti-bot blocks\nfunction detectBlock(html, statusCode) {\n  const blockIndicators = [\n    'captcha',\n    'challenge-running',\n    'cf-browser-verification',\n    'ray id',\n    'access denied',\n    'please verify',\n    'bot detection',\n    'security check'\n  ];\n  \n  const lowerHtml = html.toLowerCase();\n  \n  if (statusCode === 403 || statusCode === 429 || statusCode === 503) {\n    return { blocked: true, reason: `HTTP ${statusCode} - Rate limited or blocked` };\n  }\n  \n  for (const indicator of blockIndicators) {\n    if (lowerHtml.includes(indicator)) {\n      return { blocked: true, reason: `Anti-bot protection detected: ${indicator}` };\n    }\n  }\n  \n  return { blocked: false, reason: null };\n}\n\n// Strip HTML and clean text\nfunction stripHtml(html) {\n  if (!html) return '';\n  \n  let text = html.replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '');\n  text = text.replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '');\n  text = text.replace(/<[^>]+>/g, ' ');\n  text = text.replace(/&nbsp;/g, ' ');\n  text = text.replace(/&amp;/g, '&');\n  text = text.replace(/&lt;/g, '<');\n  text = text.replace(/&gt;/g, '>');\n  text = text.replace(/&quot;/g, '\"');\n  text = text.replace(/&#39;/g, \"'\");\n  text = text.replace(/&#(\\d+);/g, (match, dec) => String.fromCharCode(dec));\n  text = text.replace(/\\s+/g, ' ');\n  \n  return text.trim();\n}\n\n// Extract location from text\nfunction extractLocation(text) {\n  // Common location patterns\n  const locationPatterns = [\n    /(?:location|venue|place|address|where)[:\\s]+([^.\\n]{5,100})/gi,\n    /(?:at|in)\\s+((?:[A-Z][a-z]+\\s*)+(?:,\\s*[A-Z]{2})?)/g,\n    /([A-Z][a-z]+(?:\\s+[A-Z][a-z]+)*,\\s*[A-Z]{2}\\s*\\d{5})/g,\n    /(\\d+\\s+[A-Z][a-z]+\\s+(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln)[^.\\n]{0,50})/gi\n  ];\n  \n  const foundLocations = [];\n  \n  for (const pattern of locationPatterns) {\n    let match;\n    while ((match = pattern.exec(text)) !== null) {\n      const loc = match[1].trim();\n      if (loc.length > 3 && loc.length < 150) {\n        foundLocations.push(loc);\n      }\n    }\n  }\n  \n  return foundLocations;\n}\n\n// Extract events with location filtering\nfunction extractEvents(text, topics, targetLocations) {\n  const events = [];\n  const sentences = text.split(/[.!?]+/);\n  \n  const eventKeywords = [\n    'event', 'conference', 'meeting', 'workshop', 'seminar', 'webinar',\n    'summit', 'forum', 'symposium', 'exhibition', 'fair', 'festival',\n    'ceremony', 'celebration', 'gathering', 'session', 'presentation',\n    'meetup', 'hackathon', 'bootcamp', 'networking', 'talk', 'lecture',\n    'date', 'when', 'where', 'time', 'location', 'venue', 'schedule',\n    'rsvp', 'register', 'join us', 'attend',\n    'january', 'february', 'march', 'april', 'may', 'june',\n    'july', 'august', 'september', 'october', 'november', 'december',\n    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',\n    '2024', '2025', '2026'\n  ];\n  \n  // Date extraction patterns\n  const datePatterns = [\n    /(\\d{1,2}[\\/-]\\d{1,2}[\\/-]\\d{2,4})/g,\n    /((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s*\\d{4})?)/gi,\n    /(\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*(?:,?\\s*\\d{4})?)/gi\n  ];\n  \n  sentences.forEach(sentence => {\n    const lowerSentence = sentence.toLowerCase();\n    \n    const hasEventKeyword = eventKeywords.some(keyword => \n      lowerSentence.includes(keyword)\n    );\n    \n    const relatedTopics = topics.filter(topic => \n      lowerSentence.includes(topic.toLowerCase())\n    );\n    \n    // Check for location match\n    const sentenceLocations = extractLocation(sentence);\n    const matchedLocations = [];\n    \n    if (targetLocations.length > 0) {\n      // Check if any target location is mentioned\n      for (const targetLoc of targetLocations) {\n        if (lowerSentence.includes(targetLoc.toLowerCase())) {\n          matchedLocations.push(targetLoc);\n        }\n        // Also check extracted locations\n        for (const foundLoc of sentenceLocations) {\n          if (foundLoc.toLowerCase().includes(targetLoc.toLowerCase())) {\n            matchedLocations.push(foundLoc);\n          }\n        }\n      }\n    }\n    \n    // Extract dates from sentence\n    const dates = [];\n    for (const pattern of datePatterns) {\n      let match;\n      while ((match = pattern.exec(sentence)) !== null) {\n        dates.push(match[1]);\n      }\n    }\n    \n    // Event must have keyword AND topic match\n    // If locations are specified, must also match location\n    const locationMatch = targetLocations.length === 0 || matchedLocations.length > 0;\n    \n    if (hasEventKeyword && relatedTopics.length > 0 && locationMatch && sentence.trim().length > 20) {\n      events.push({\n        text: sentence.trim(),\n        relatedTopics: relatedTopics,\n        matchedLocations: matchedLocations.length > 0 ? matchedLocations : sentenceLocations,\n        extractedDates: dates,\n        confidence: relatedTopics.length > 1 ? 'high' : 'medium'\n      });\n    }\n  });\n  \n  return events;\n}\n\n// Check for blocking\nconst blockStatus = detectBlock(html, statusCode);\n\nif (blockStatus.blocked) {\n  return {\n    json: {\n      sourceUrl: url,\n      sourceName: name,\n      page: page,\n      siteType: siteType,\n      blocked: true,\n      blockReason: blockStatus.reason,\n      eventsFound: 0,\n      events: [],\n      scrapedAt: new Date().toISOString(),\n      topics: topics,\n      locations: locations\n    }\n  };\n}\n\n// Clean HTML and extract events\nconst cleanText = stripHtml(html);\nconst extractedEvents = extractEvents(cleanText, topics, locations);\n\nreturn {\n  json: {\n    sourceUrl: url,\n    sourceName: name,\n    page: page,\n    siteType: siteType,\n    blocked: false,\n    blockReason: null,\n    eventsFound: extractedEvents.length,\n    events: extractedEvents,\n    scrapedAt: new Date().toISOString(),\n    topics: topics,\n    locations: locations,\n    contentPreview: cleanText.substring(0, 500) + '...'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        480
+      ],
+      "id": "extract-events-enhanced",
+      "name": "Extract Events (Location-Aware)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-events",
+              "leftValue": "={{ $json.eventsFound }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2240,
+        480
+      ],
+      "id": "check-events",
+      "name": "Has Events?"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "events",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        2460,
+        400
+      ],
+      "id": "split-events",
+      "name": "Split Events"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "event-url",
+              "name": "source_url",
+              "value": "={{ $json.sourceUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "event-name",
+              "name": "source_name",
+              "value": "={{ $json.sourceName }}",
+              "type": "string"
+            },
+            {
+              "id": "page-num",
+              "name": "page_number",
+              "value": "={{ $json.page }}",
+              "type": "number"
+            },
+            {
+              "id": "event-text",
+              "name": "event_description",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "event-topics",
+              "name": "related_topics",
+              "value": "={{ $json.relatedTopics.join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "event-location",
+              "name": "location",
+              "value": "={{ $json.matchedLocations.join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "event-dates",
+              "name": "extracted_dates",
+              "value": "={{ $json.extractedDates.join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "event-confidence",
+              "name": "confidence",
+              "value": "={{ $json.confidence }}",
+              "type": "string"
+            },
+            {
+              "id": "scraped-at",
+              "name": "scraped_at",
+              "value": "={{ $('Extract Events (Location-Aware)').item.json.scrapedAt }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2680,
+        400
+      ],
+      "id": "format-output",
+      "name": "Format Event Data"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=2",
+          "mode": "list",
+          "cachedResultName": "Results",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_url": "={{ $json.source_url }}",
+            "source_name": "={{ $json.source_name }}",
+            "page_number": "={{ $json.page_number }}",
+            "event_description": "={{ $json.event_description }}",
+            "related_topics": "={{ $json.related_topics }}",
+            "location": "={{ $json.location }}",
+            "extracted_dates": "={{ $json.extracted_dates }}",
+            "confidence": "={{ $json.confidence }}",
+            "scraped_at": "={{ $json.scraped_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "source_url",
+              "displayName": "source_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_name",
+              "displayName": "source_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "page_number",
+              "displayName": "page_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_description",
+              "displayName": "event_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "related_topics",
+              "displayName": "related_topics",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "extracted_dates",
+              "displayName": "extracted_dates",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scraped_at",
+              "displayName": "scraped_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2900,
+        400
+      ],
+      "id": "write-results",
+      "name": "Write to Results Sheet"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=4",
+          "mode": "list",
+          "cachedResultName": "Errors",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $('Anti-Rate-Limit Delay').item.json.url }}",
+            "source_name": "={{ $('Anti-Rate-Limit Delay').item.json.name }}",
+            "page": "={{ $('Anti-Rate-Limit Delay').item.json.page }}",
+            "error": "HTTP Request Failed - Status: {{ $json.statusCode }}",
+            "timestamp": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_name",
+              "displayName": "source_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "page",
+              "displayName": "page",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2020,
+        760
+      ],
+      "id": "log-errors",
+      "name": "Log Failed Requests"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-blocked",
+              "leftValue": "={{ $json.blocked }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2240,
+        620
+      ],
+      "id": "check-blocked",
+      "name": "Was Blocked?"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=4",
+          "mode": "list",
+          "cachedResultName": "Errors",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.sourceUrl }}",
+            "source_name": "={{ $json.sourceName }}",
+            "page": "={{ $json.page }}",
+            "error": "={{ $json.blockReason }}",
+            "timestamp": "={{ $json.scrapedAt }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_name",
+              "displayName": "source_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "page",
+              "displayName": "page",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2460,
+        700
+      ],
+      "id": "log-blocked",
+      "name": "Log Anti-Bot Blocks"
+    },
+    {
+      "parameters": {
+        "content": "# Enhanced Google Sheet URL Event Scraper\n\n## Anti-Bot Protection Features\n\n### 1. Realistic Browser Headers\n- User-Agent mimics Chrome browser\n- Accept, Accept-Language, Accept-Encoding headers\n- Security headers (DNT, Sec-Fetch-*)\n- Cache-Control headers\n\n### 2. Rate Limiting Protection\n- Configurable delay between requests (default 2s)\n- Prevents overwhelming target servers\n- Avoids triggering rate limits\n\n### 3. Block Detection\n- Detects Cloudflare challenges\n- Identifies CAPTCHA pages\n- Recognizes 403/429/503 status codes\n- Logs blocked requests for review\n\n### 4. Pagination Support\n- Automatically generates multiple page URLs\n- Supports Meetup.com offset pagination\n- Supports Eventbrite page pagination\n- Configurable max pages per source\n\n### 5. Location-Based Filtering\n- Add target locations in Tab 4\n- Extracts location information from text\n- Filters events by specified cities/regions\n- Captures addresses and venues\n\n### 6. Enhanced Event Detection\n- More comprehensive event keywords\n- Date extraction patterns\n- Location pattern matching\n- Better confidence scoring\n\n## LIMITATIONS & IMPORTANT NOTES\n\n### What This CANNOT Bypass:\n❌ **JavaScript-Rendered Content** - Sites like Meetup.com heavily use React/Vue. Pure HTTP requests won't get the content. You need a headless browser.\n\n❌ **Cloudflare Pro/Enterprise** - Advanced protection will still block requests\n\n❌ **CAPTCHAs** - Cannot solve image or text CAPTCHAs\n\n❌ **Login-Required Content** - Cannot access authenticated pages\n\n### Better Alternatives for JS-Heavy Sites:\n\n1. **Use Official APIs**\n   - Meetup API: https://www.meetup.com/api/\n   - Eventbrite API: https://www.eventbrite.com/platform/api\n   - These are more reliable and legal\n\n2. **Headless Browser Solutions**\n   - Puppeteer (Node.js)\n   - Playwright\n   - Selenium\n   - Browserless.io (paid service)\n\n3. **Scraping APIs**\n   - ScrapingBee\n   - Bright Data\n   - Oxylabs\n   - (These are paid but handle anti-bot)",
+        "height": 1260,
+        "width": 520,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        20
+      ],
+      "id": "enhanced-features-note",
+      "name": "Enhanced Features & Limitations"
+    },
+    {
+      "parameters": {
+        "content": "## Setup Instructions\n\n### Google Sheet Structure (5 Tabs)\n\n**Tab 1: URLs**\n- url: Base URL to scrape\n- name: Source name\n- max_pages: Number of pages to scrape (default: 3)\n- delay_ms: Delay between requests in milliseconds (default: 2000)\n\n**Tab 2: Topics**\n- topic: Keywords to search for\n\n**Tab 3: Results** (auto-filled)\n- source_url, source_name, page_number\n- event_description, related_topics\n- location, extracted_dates\n- confidence, scraped_at\n\n**Tab 4: Locations** (optional)\n- location: Cities/regions to filter by (e.g., \"San Francisco\", \"New York\")\n\n**Tab 5: Errors** (auto-filled)\n- url, source_name, page, error, timestamp",
+        "height": 480,
+        "width": 440,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        220,
+        20
+      ],
+      "id": "setup-instructions",
+      "name": "Setup Instructions"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read URLs from Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Topics from Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Locations from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read URLs from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Merge URLs, Topics & Locations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Topics from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Merge URLs, Topics & Locations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Locations from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Merge URLs, Topics & Locations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge URLs, Topics & Locations": {
+      "main": [
+        [
+          {
+            "node": "Split URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split URLs": {
+      "main": [
+        [
+          {
+            "node": "Generate Paginated URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Paginated URLs": {
+      "main": [
+        [
+          {
+            "node": "Anti-Rate-Limit Delay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anti-Rate-Limit Delay": {
+      "main": [
+        [
+          {
+            "node": "Scrape with Anti-Bot Headers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape with Anti-Bot Headers": {
+      "main": [
+        [
+          {
+            "node": "Request Successful?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request Successful?": {
+      "main": [
+        [
+          {
+            "node": "Extract Events (Location-Aware)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Failed Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Events (Location-Aware)": {
+      "main": [
+        [
+          {
+            "node": "Has Events?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Was Blocked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Events?": {
+      "main": [
+        [
+          {
+            "node": "Split Events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split Events": {
+      "main": [
+        [
+          {
+            "node": "Format Event Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Event Data": {
+      "main": [
+        [
+          {
+            "node": "Write to Results Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Was Blocked?": {
+      "main": [
+        [
+          {
+            "node": "Log Anti-Bot Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "id": "",
+  "tags": []
+}

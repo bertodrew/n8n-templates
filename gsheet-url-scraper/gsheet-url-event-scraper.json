@@ -1,0 +1,491 @@
+{
+  "name": "Google Sheet URL Event Scraper",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        480
+      ],
+      "id": "manual-trigger-1",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "URLs",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        380
+      ],
+      "id": "read-urls-sheet",
+      "name": "Read URLs from Sheet"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=1",
+          "mode": "list",
+          "cachedResultName": "Topics",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        580
+      ],
+      "id": "read-topics-sheet",
+      "name": "Read Topics from Sheet"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge URLs and Topics data\nconst urls = $input.first().json;\nconst topics = $input.last().json;\n\n// Get all topic values from the topics sheet\nconst topicList = $('Read Topics from Sheet').all().map(item => {\n  return item.json.topic || item.json.Topic || Object.values(item.json)[0];\n}).filter(topic => topic && topic.trim() !== '');\n\n// Get all URLs from the URLs sheet\nconst urlList = $('Read URLs from Sheet').all().map(item => {\n  return {\n    url: item.json.url || item.json.URL || Object.values(item.json)[0],\n    name: item.json.name || item.json.Name || Object.values(item.json)[1] || 'Unknown'\n  };\n}).filter(item => item.url && item.url.trim() !== '');\n\nreturn {\n  json: {\n    urls: urlList,\n    topics: topicList,\n    topicsString: topicList.join(', ')\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        480
+      ],
+      "id": "merge-data",
+      "name": "Merge URLs and Topics"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "urls",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        920,
+        480
+      ],
+      "id": "split-urls",
+      "name": "Split URLs"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 5
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        480
+      ],
+      "id": "scrape-url",
+      "name": "Scrape URL Content"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and clean HTML content\nconst html = $input.item.json.data || $input.item.binary?.data?.toString('utf-8') || '';\nconst url = $('Split URLs').item.json.url;\nconst name = $('Split URLs').item.json.name;\nconst topics = $('Merge URLs and Topics').first().json.topics;\n\n// Function to strip HTML tags and clean text\nfunction stripHtml(html) {\n  if (!html) return '';\n  \n  // Remove script and style tags with their content\n  let text = html.replace(/<script[^>]*>([\\s\\S]*?)<\\/script>/gi, '');\n  text = text.replace(/<style[^>]*>([\\s\\S]*?)<\\/style>/gi, '');\n  \n  // Remove HTML tags\n  text = text.replace(/<[^>]+>/g, ' ');\n  \n  // Decode HTML entities\n  text = text.replace(/&nbsp;/g, ' ');\n  text = text.replace(/&amp;/g, '&');\n  text = text.replace(/&lt;/g, '<');\n  text = text.replace(/&gt;/g, '>');\n  text = text.replace(/&quot;/g, '\"');\n  text = text.replace(/&#39;/g, \"'\");\n  text = text.replace(/&#(\\d+);/g, (match, dec) => String.fromCharCode(dec));\n  \n  // Clean up whitespace\n  text = text.replace(/\\s+/g, ' ');\n  text = text.trim();\n  \n  return text;\n}\n\n// Function to extract potential event information\nfunction extractEvents(text, topics) {\n  const events = [];\n  const sentences = text.split(/[.!?]+/);\n  \n  // Keywords that might indicate events\n  const eventKeywords = [\n    'event', 'conference', 'meeting', 'workshop', 'seminar', 'webinar',\n    'summit', 'forum', 'symposium', 'exhibition', 'fair', 'festival',\n    'ceremony', 'celebration', 'gathering', 'session', 'presentation',\n    'date', 'when', 'where', 'time', 'location', 'venue', 'schedule',\n    'january', 'february', 'march', 'april', 'may', 'june',\n    'july', 'august', 'september', 'october', 'november', 'december',\n    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',\n    '2024', '2025', '2026'\n  ];\n  \n  // Check each sentence for event-related content and topic relevance\n  sentences.forEach(sentence => {\n    const lowerSentence = sentence.toLowerCase();\n    \n    // Check if sentence contains event keywords\n    const hasEventKeyword = eventKeywords.some(keyword => \n      lowerSentence.includes(keyword)\n    );\n    \n    // Check if sentence contains any of the topics\n    const relatedTopics = topics.filter(topic => \n      lowerSentence.includes(topic.toLowerCase())\n    );\n    \n    // If both conditions are met, consider it a potential event\n    if (hasEventKeyword && relatedTopics.length > 0 && sentence.trim().length > 20) {\n      events.push({\n        text: sentence.trim(),\n        relatedTopics: relatedTopics,\n        confidence: relatedTopics.length > 1 ? 'high' : 'medium'\n      });\n    }\n  });\n  \n  return events;\n}\n\n// Clean the HTML\nconst cleanText = stripHtml(html);\n\n// Extract events\nconst extractedEvents = extractEvents(cleanText, topics);\n\n// Return results\nreturn {\n  json: {\n    sourceUrl: url,\n    sourceName: name,\n    eventsFound: extractedEvents.length,\n    events: extractedEvents,\n    scrapedAt: new Date().toISOString(),\n    topics: topics,\n    contentPreview: cleanText.substring(0, 500) + '...'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        480
+      ],
+      "id": "extract-events",
+      "name": "Extract Events from Content"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-events",
+              "leftValue": "={{ $json.eventsFound }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1580,
+        480
+      ],
+      "id": "check-events",
+      "name": "Has Events?"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "events",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        400
+      ],
+      "id": "split-events",
+      "name": "Split Events"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "event-url",
+              "name": "source_url",
+              "value": "={{ $json.sourceUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "event-name",
+              "name": "source_name",
+              "value": "={{ $json.sourceName }}",
+              "type": "string"
+            },
+            {
+              "id": "event-text",
+              "name": "event_description",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "event-topics",
+              "name": "related_topics",
+              "value": "={{ $json.relatedTopics.join(', ') }}",
+              "type": "string"
+            },
+            {
+              "id": "event-confidence",
+              "name": "confidence",
+              "value": "={{ $json.confidence }}",
+              "type": "string"
+            },
+            {
+              "id": "scraped-at",
+              "name": "scraped_at",
+              "value": "={{ $('Extract Events from Content').item.json.scrapedAt }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2020,
+        400
+      ],
+      "id": "format-output",
+      "name": "Format Event Data"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list",
+          "cachedResultName": "Your Google Sheet",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=2",
+          "mode": "list",
+          "cachedResultName": "Results",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "source_url": "={{ $json.source_url }}",
+            "source_name": "={{ $json.source_name }}",
+            "event_description": "={{ $json.event_description }}",
+            "related_topics": "={{ $json.related_topics }}",
+            "confidence": "={{ $json.confidence }}",
+            "scraped_at": "={{ $json.scraped_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "source_url",
+              "displayName": "source_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source_name",
+              "displayName": "source_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "event_description",
+              "displayName": "event_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "related_topics",
+              "displayName": "related_topics",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "scraped_at",
+              "displayName": "scraped_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2240,
+        400
+      ],
+      "id": "write-results",
+      "name": "Write to Results Sheet"
+    },
+    {
+      "parameters": {
+        "content": "# Google Sheet URL Event Scraper\n\n## Overview\nThis workflow scrapes URLs from a Google Sheet and extracts event-related information based on specified topics.\n\n## Setup Instructions\n\n### 1. Google Sheet Structure\nCreate a Google Sheet with 3 tabs:\n\n**Tab 1 - URLs** (columns):\n- url: The URL to scrape\n- name: Name/description of the source (optional)\n\n**Tab 2 - Topics** (columns):\n- topic: Topics to search for (e.g., \"AI\", \"technology\", \"conference\")\n\n**Tab 3 - Results** (auto-populated):\n- source_url\n- source_name\n- event_description\n- related_topics\n- confidence\n- scraped_at\n\n### 2. Connect Google Sheets\n1. Click on each Google Sheets node\n2. Add your Google Sheets credentials\n3. Select your Google Sheet\n4. Select the appropriate tab for each node\n\n### 3. How It Works\n1. Reads all URLs from Tab 1\n2. Reads all topics from Tab 2\n3. Scrapes each URL using free HTTP requests\n4. Extracts text content and searches for events\n5. Filters events that match your topics\n6. Writes results to Tab 3\n\n## Features\n- 100% Free - No paid scraping services\n- Event detection using keyword matching\n- Topic relevance filtering\n- Confidence scoring (high/medium)\n- Automatic HTML cleaning\n- Error handling for failed requests\n\n## Customization\nYou can modify the event detection keywords in the \"Extract Events from Content\" node to match your specific needs.",
+        "height": 1027.9506172839505,
+        "width": 465.45679012345675,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -220,
+        40
+      ],
+      "id": "instructions-note",
+      "name": "Instructions"
+    },
+    {
+      "parameters": {
+        "content": "## No Events Found\nURLs that don't contain events matching your topics will end here.",
+        "height": 160,
+        "width": 300,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        600
+      ],
+      "id": "no-events-note",
+      "name": "No Events Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read URLs from Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Topics from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read URLs from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Merge URLs and Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Topics from Sheet": {
+      "main": [
+        [
+          {
+            "node": "Merge URLs and Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge URLs and Topics": {
+      "main": [
+        [
+          {
+            "node": "Split URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split URLs": {
+      "main": [
+        [
+          {
+            "node": "Scrape URL Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape URL Content": {
+      "main": [
+        [
+          {
+            "node": "Extract Events from Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Events from Content": {
+      "main": [
+        [
+          {
+            "node": "Has Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Events?": {
+      "main": [
+        [
+          {
+            "node": "Split Events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split Events": {
+      "main": [
+        [
+          {
+            "node": "Format Event Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Event Data": {
+      "main": [
+        [
+          {
+            "node": "Write to Results Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": ""
+  },
+  "id": "",
+  "tags": []
+}
