@@ -36,6 +36,83 @@ This project uses the `n8n-mcp` MCP server for full n8n workflow automation. Con
 
 > Without `N8N_API_URL` and `N8N_API_KEY`, only documentation/node-lookup tools are available. With them, workflow management tools (create, update, validate, deploy, execute) are unlocked.
 
+## LLM Provider — Phoenix Technologies AG MaaS
+
+This project uses **Model as a Service (MaaS)** from [Phoenix Technologies AG](https://phoenix-technologies.ch/en/products-and-services/platform-as-a-service/ai-model-as-a-service) as its LLM provider. The MaaS platform is **OpenAI-compatible**, so any n8n node or integration that supports the OpenAI API can connect to it by overriding the base URL.
+
+**Documentation:** https://documentation.phoenix-technologies.ch/maas/supported-models/
+
+### API Configuration (OpenAI-Compatible)
+
+| Setting | Value |
+|---------|-------|
+| **Base URL** | `https://maas.ai-2.kvant.cloud/v1` |
+| **Auth Header** | `Authorization: Bearer <YOUR_PHOENIX_API_KEY>` |
+| **Protocol** | OpenAI-compatible (LiteLLM gateway) |
+
+### Supported Models
+
+| Model | Parameters | Type |
+|-------|-----------|------|
+| Apertus 70B | 70B | Swiss sovereign LLM (EPFL/ETH Zurich) |
+| Apertus 8B | 8B | Swiss sovereign LLM (EPFL/ETH Zurich) |
+| DeepSeek-R1-70B | 70B | Reasoning |
+| DeepSeek-R1-670B | 670B | Reasoning |
+| Llama-3.3-70B | 70B | General purpose |
+| Llama 4 Maverick 400B | 400B | General purpose |
+| Llama 4 Scout 17B-16E Instruct | 17B (16 experts) | MoE instruction-tuned |
+| QwQ-32B | 32B | Reasoning |
+| OpenAI GPT-OSS-120B | 120B | General purpose |
+| Google Gemma 3n-E4B-IT | 4B | Lightweight |
+| IBM Granite 3.3 8B | 8B | Enterprise |
+| IBM Granite Vision 2B | 2B | Vision |
+| IBM Granite EMB 278m | 278M | Embeddings |
+| BAAI BGE-M3 | — | Embeddings |
+| BAAI BGE-Reranker | — | Reranking |
+
+> All models are hosted in Swiss data centers (Zurich & Basel) with 99.99% uptime. Bring Your Own Model (BYOM) is also supported on dedicated GPUs.
+
+### Using Phoenix MaaS in n8n Workflows
+
+When configuring AI/LLM nodes in n8n workflows that need an LLM, use the **OpenAI-compatible** credential type with the Phoenix MaaS base URL:
+
+**n8n OpenAI credential override:**
+```json
+{
+  "credentials": {
+    "openAiApi": {
+      "id": "phoenix-maas",
+      "name": "Phoenix MaaS"
+    }
+  }
+}
+```
+
+In the n8n credential settings, set:
+- **API Key:** Your Phoenix MaaS API key
+- **Base URL:** `https://maas.ai-2.kvant.cloud/v1`
+
+For HTTP Request nodes calling the API directly:
+```
+POST https://maas.ai-2.kvant.cloud/v1/chat/completions
+Authorization: Bearer <YOUR_PHOENIX_API_KEY>
+Content-Type: application/json
+
+{
+  "model": "llama-3.3-70b",
+  "messages": [{"role": "user", "content": "Hello"}]
+}
+```
+
+### Available OpenAI-Compatible Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `/v1/chat/completions` | Chat completions (streaming & non-streaming) |
+| `/v1/completions` | Text completions |
+| `/v1/embeddings` | Generate embeddings (BGE-M3, Granite EMB) |
+| `/v1/models` | List available models |
+
 ## Required Skills
 
 Install the following n8n skills from [skills.sh](https://skills.sh/czlonkowski/n8n-skills):
