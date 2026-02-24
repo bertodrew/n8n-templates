@@ -26,8 +26,8 @@ This project uses the `n8n-mcp` MCP server for full n8n workflow automation. Con
         "MCP_MODE": "stdio",
         "LOG_LEVEL": "error",
         "DISABLE_CONSOLE_OUTPUT": "true",
-        "N8N_API_URL": "https://your-n8n-instance.com",
-        "N8N_API_KEY": "your-api-key"
+        "N8N_API_URL": "https://n8n-d0053-n8n-dev.pub.basel.kvant.cloud",
+        "N8N_API_KEY": "$N8N_API_KEY"
       }
     }
   }
@@ -35,6 +35,23 @@ This project uses the `n8n-mcp` MCP server for full n8n workflow automation. Con
 ```
 
 > Without `N8N_API_URL` and `N8N_API_KEY`, only documentation/node-lookup tools are available. With them, workflow management tools (create, update, validate, deploy, execute) are unlocked.
+
+### n8n Instance
+
+| Setting | Value |
+|---------|-------|
+| **Instance URL** | `https://n8n-d0053-n8n-dev.pub.basel.kvant.cloud` |
+| **Environment** | Development / Staging |
+| **API Settings** | `https://n8n-d0053-n8n-dev.pub.basel.kvant.cloud/settings/api` |
+
+### Environment Variables
+
+Store secrets in your shell environment or `.env` file — **never commit API keys to the repository**:
+
+```bash
+export N8N_API_KEY="<your-n8n-api-key>"
+export PHOENIX_MAAS_API_KEY="<your-phoenix-maas-api-key>"
+```
 
 ## LLM Provider — Phoenix Technologies AG MaaS
 
@@ -46,7 +63,8 @@ This project uses **Model as a Service (MaaS)** from [Phoenix Technologies AG](h
 
 | Setting | Value |
 |---------|-------|
-| **Base URL** | `https://maas.ai-2.kvant.cloud/v1` |
+| **Base URL (Production)** | `https://maas.ai-2.kvant.cloud/v1` |
+| **Base URL (Staging)** | `https://litellm-maas-staging.pub.ai-2.kvant.cloud/v1` |
 | **Auth Header** | `Authorization: Bearer <YOUR_PHOENIX_API_KEY>` |
 | **Protocol** | OpenAI-compatible (LiteLLM gateway) |
 
@@ -90,11 +108,12 @@ When configuring AI/LLM nodes in n8n workflows that need an LLM, use the **OpenA
 
 In the n8n credential settings, set:
 - **API Key:** Your Phoenix MaaS API key
-- **Base URL:** `https://maas.ai-2.kvant.cloud/v1`
+- **Base URL (Staging):** `https://litellm-maas-staging.pub.ai-2.kvant.cloud/v1`
+- **Base URL (Production):** `https://maas.ai-2.kvant.cloud/v1`
 
 For HTTP Request nodes calling the API directly:
 ```
-POST https://maas.ai-2.kvant.cloud/v1/chat/completions
+POST https://litellm-maas-staging.pub.ai-2.kvant.cloud/v1/chat/completions
 Authorization: Bearer <YOUR_PHOENIX_API_KEY>
 Content-Type: application/json
 
